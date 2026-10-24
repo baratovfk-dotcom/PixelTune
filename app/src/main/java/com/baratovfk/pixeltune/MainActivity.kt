@@ -427,7 +427,7 @@ private fun PixelTuneScreen(
                                     value = bandLevel,
                                     onValueChange = { newValue ->
                                         bandLevel = newValue
-                                        equalizer.setBandLevel(i.toShort(), newValue.toShort())
+                                        equalizer.setBandLevel(i.toInt().toShort(), newValue.toInt().toShort())
                                     },
                                     valueRange = equalizer.bandLevelRange[0].toFloat()..equalizer.bandLevelRange[1].toFloat(),
                                     colors = SliderDefaults.colors(thumbColor = Lime, activeTrackColor = Lime)
