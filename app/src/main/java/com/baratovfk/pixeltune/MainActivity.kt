@@ -2,11 +2,15 @@ package com.baratovfk.pixeltune
 
 import android.Manifest
 import android.content.ContentUris
+import android.content.Context
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.database.Cursor
+import android.media.audiofx.Equalizer
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.CountDownTimer
 import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -19,12 +23,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -38,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 
 private val Night = Color(0xFF0D0F14)
@@ -51,6 +51,15 @@ class MainActivity : ComponentActivity() {
     private var songs by mutableStateOf<List<Song>>(emptyList())
     private var permissionGranted by mutableStateOf(false)
     private lateinit var player: ExoPlayer
+    private lateinit var prefs: SharedPreferences
+    private var equalizer: Equalizer? = null
+
+    private var isShuffleEnabled by mutableStateOf(false)
+    private var repeatModeState by mutableStateOf(Player.REPEAT_MODE_OFF)
+    private var favorites = mutableStateOf(setOf<Long>())
+    private var sleepTimer: CountDownTimer? = null
+    private var sleepTimerMinutesLeft by mutableStateOf(0)
+
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         permissionGranted = granted
         if (granted) loadSongs()
@@ -58,30 +67,121 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        player = ExoPlayer.Builder(this).build()
+        prefs = getSharedPreferences("pixeltune_prefs", Context.MODE_PRIVATE)
+        loadFavoritesFromPrefs()
+
+        player = ExoPlayer.Builder(this).build().apply {
+            addListener(object : Player.Listener {
+                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    super.onMediaItemTransition(mediaItem, reason)
+                }
+            })
+        }
+
         val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
         permissionGranted = ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
         if (permissionGranted) loadSongs() else permissionLauncher.launch(permission)
+
         setContent {
             PixelTuneScreen(
                 songs = songs,
                 isPlaying = player.isPlaying,
+                favorites = favorites.value,
+                isShuffle = isShuffleEnabled,
+                repeatMode = repeatModeState,
+                sleepTimerMinutes = sleepTimerMinutesLeft,
                 onPlay = { index ->
                     if (index in songs.indices) {
-                        player.setMediaItem(MediaItem.fromUri(songs[index].uri))
+                        player.seekTo(index, 0)
                         player.prepare()
                         player.play()
+                        initEqualizer()
                     }
                 },
                 onToggle = { if (player.isPlaying) player.pause() else player.play() },
-                onNext = { if (songs.isNotEmpty()) { player.seekToNextMediaItem(); if (!player.isPlaying) player.play() } },
-                onPrevious = { if (songs.isNotEmpty()) { player.seekToPreviousMediaItem(); if (!player.isPlaying) player.play() } },
+                onNext = {
+                    if (songs.isNotEmpty()) {
+                        if (player.hasNextMediaItem()) {
+                            player.seekToNextMediaItem()
+                        } else {
+                            player.seekTo(0, 0)
+                        }
+                        if (!player.isPlaying) player.play()
+                    }
+                },
+                onPrevious = {
+                    if (songs.isNotEmpty()) {
+                        if (player.hasPreviousMediaItem()) {
+                            player.seekToPreviousMediaItem()
+                        } else {
+                            player.seekTo(0, 0)
+                        }
+                        if (!player.isPlaying) player.play()
+                    }
+                },
+                onToggleFavorite = { id -> toggleFavorite(id) },
+                onToggleShuffle = {
+                    isShuffleEnabled = !isShuffleEnabled
+                    player.shuffleModeEnabled = isShuffleEnabled
+                },
+                onToggleRepeat = {
+                    repeatModeState = when (repeatModeState) {
+                        Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+                        Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+                        else -> Player.REPEAT_MODE_OFF
+                    }
+                    player.repeatMode = repeatModeState
+                },
+                onSetSleepTimer = { minutes -> startSleepTimer(minutes) },
+                equalizer = equalizer,
                 onRequestPermission = {
                     if (!permissionGranted) permissionLauncher.launch(permission)
                     else loadSongs()
                 }
             )
         }
+    }
+
+    private fun loadFavoritesFromPrefs() {
+        val saved = prefs.getStringSet("favs", emptySet()) ?: emptySet()
+        favorites.value = saved.mapNotNull { it.toLongOrNull() }.toSet()
+    }
+
+    private fun toggleFavorite(id: Long) {
+        val currentSet = favorites.value.toMutableSet()
+        if (currentSet.contains(id)) currentSet.remove(id) else currentSet.add(id)
+        favorites.value = currentSet
+        prefs.edit().putStringSet("favs", currentSet.map { it.toString() }.toSet()).apply()
+    }
+
+    private fun initEqualizer() {
+        try {
+            if (equalizer == null && player.audioSessionId != android.media.audiofx.AudioEffect.ERROR_BAD_VALUE) {
+                equalizer = Equalizer(0, player.audioSessionId).apply {
+                    enabled = true
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun startSleepTimer(minutes: Int) {
+        sleepTimer?.cancel()
+        if (minutes <= 0) {
+            sleepTimerMinutesLeft = 0
+            return
+        }
+        sleepTimerMinutesLeft = minutes
+        sleepTimer = object : CountDownTimer((minutes * 60 * 1000).toLong(), 60000) {
+            override fun onTick(millisUntilFinished: Long) {
+                sleepTimerMinutesLeft = (millisUntilFinished / 60000).toInt() + 1
+            }
+            override fun onFinish() {
+                player.pause()
+                sleepTimerMinutesLeft = 0
+            }
+        }.start()
     }
 
     private fun loadSongs() {
@@ -111,6 +211,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        sleepTimer?.cancel()
+        equalizer?.release()
         player.release()
         super.onDestroy()
     }
@@ -120,38 +222,36 @@ class MainActivity : ComponentActivity() {
 private fun PixelTuneScreen(
     songs: List<Song>,
     isPlaying: Boolean,
+    favorites: Set<Long>,
+    isShuffle: Boolean,
+    repeatMode: Int,
+    sleepTimerMinutes: Int,
     onPlay: (Int) -> Unit,
     onToggle: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
+    onToggleFavorite: (Long) -> Unit,
+    onToggleShuffle: () -> Unit,
+    onToggleRepeat: () -> Unit,
+    onSetSleepTimer: (Int) -> Unit,
+    equalizer: Equalizer?,
     onRequestPermission: () -> Unit
 ) {
     var tab by remember { mutableStateOf("Музыка") }
-    var current by remember { mutableIntStateOf(0) }
-    val favorites = remember { mutableStateListOf<Long>() }
-    val visibleSongs = if (tab == "Избранное") songs.filter { it.id in favorites } else songs
-    val selected = songs.getOrNull(current)
+    var searchQuery by remember { mutableStateOf("") }
+    var showEqualizerDialog by remember { mutableStateOf(false) }
+    var showSleepTimerDialog by remember { mutableStateOf(false) }
+
+    val filteredSongs = songs.filter {
+        it.title.contains(searchQuery, ignoreCase = true) || it.artist.contains(searchQuery, ignoreCase = true)
+    }
+    val visibleSongs = if (tab == "Избранное") filteredSongs.filter { it.id in favorites } else filteredSongs
 
     MaterialTheme(colorScheme = darkColorScheme(primary = Lime, background = Night, surface = Panel)) {
         Scaffold(
             containerColor = Night,
             bottomBar = {
                 Column {
-                    if (selected != null) {
-                        Row(
-                            Modifier.fillMaxWidth().padding(horizontal = 12.dp).clip(RoundedCornerShape(18.dp))
-                                .background(Panel).clickable { tab = "Музыка" }.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            AlbumTile("♫", Modifier.size(42.dp))
-                            Spacer(Modifier.width(12.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(selected.title, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(selected.artist, color = Soft, fontSize = 12.sp, maxLines = 1)
-                            }
-                            IconButton(onClick = onToggle) { Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null, tint = Lime) }
-                        }
-                    }
                     NavigationBar(containerColor = Color(0xFF12141A)) {
                         listOf("Музыка", "Избранное").forEach { item ->
                             NavigationBarItem(
@@ -167,83 +267,218 @@ private fun PixelTuneScreen(
             }
         ) { padding ->
             Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 20.dp)) {
-                Spacer(Modifier.height(24.dp))
-                Text("PIXELTUNE", color = Lime, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
-                Text(if (tab == "Музыка") "Твоя музыка." else "Избранное", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.ExtraBold)
-                Spacer(Modifier.height(18.dp))
-                Box(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp))
-                        .background(Brush.linearGradient(listOf(Color(0xFF37435A), Color(0xFF1B202B), Color(0xFF2E4022))))
-                        .padding(20.dp)
-                ) {
+                Spacer(Modifier.height(16.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column {
-                        Text("ТВОЙ ЗВУК. ТВОИ ПРАВИЛА.", color = Lime, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.3.sp)
-                        Spacer(Modifier.height(8.dp))
-                        Text("Музыка без лишнего.", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                        Text("Локальная библиотека • простой плеер", color = Soft, fontSize = 12.sp)
-                        Spacer(Modifier.height(14.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("${visibleSongs.size} треков", color = Color.White, modifier = Modifier.weight(1f))
-                            Button(onClick = onRequestPermission, colors = ButtonDefaults.buttonColors(containerColor = Lime), shape = RoundedCornerShape(50)) {
-                                Text("Обновить", color = Night)
-                            }
+                        Text("PIXELTUNE", color = Lime, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
+                        Text(if (tab == "Музыка") "Твоя музыка." else "Избранное", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
+                    }
+                    Row {
+                        IconButton(onClick = { showEqualizerDialog = true }) {
+                            Icon(Icons.Default.Equalizer, contentDescription = "Эквалайзер", tint = Lime)
+                        }
+                        IconButton(onClick = { showSleepTimerDialog = true }) {
+                            Icon(Icons.Default.Timer, contentDescription = "Таймер сна", tint = if (sleepTimerMinutes > 0) Lime else Soft)
                         }
                     }
                 }
-                Spacer(Modifier.height(20.dp))
-                Text(if (tab == "Музыка") "Все треки" else "Любимые треки", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+
+                Spacer(Modifier.height(12.dp))
+
+                // Строка поиска
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Поиск треков...", color = Soft) },
+                    leadingIcon = { Icon(Icons.Default.Search, null, tint = Soft) },
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Lime,
+                        unfocusedBorderColor = Color.Transparent,
+                        focusedContainerColor = Panel,
+                        unfocusedContainerColor = Panel,
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    ),
+                    singleLine = true
+                )
+
+                Spacer(Modifier.height(12.dp))
+
+                // Элементы управления воспроизведением (Перемешивание, Повтор)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = onToggleShuffle) {
+                            Icon(Icons.Default.Shuffle, null, tint = if (isShuffle) Lime else Soft)
+                        }
+                        IconButton(onClick = onToggleRepeat) {
+                            Icon(
+                                imageVector = when (repeatMode) {
+                                    Player.REPEAT_MODE_ONE -> Icons.Default.RepeatOne
+                                    else -> Icons.Default.Repeat
+                                },
+                                null,
+                                tint = if (repeatMode != Player.REPEAT_MODE_OFF) Lime else Soft
+                            )
+                        }
+                        if (sleepTimerMinutes > 0) {
+                            Spacer(Modifier.width(8.dp))
+                            Text("Таймер: ${sleepTimerMinutes}м", color = Lime, fontSize = 12.sp)
+                        }
+                    }
+                    Button(onClick = onRequestPermission, colors = ButtonDefaults.buttonColors(containerColor = Panel), shape = RoundedCornerShape(50)) {
+                        Text("Обновить", color = Lime, fontSize = 12.sp)
+                    }
+                }
+
                 Spacer(Modifier.height(8.dp))
+                Text(if (tab == "Музыка") "Все треки (${visibleSongs.size})" else "Любимые треки (${visibleSongs.size})", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+
                 if (visibleSongs.isEmpty()) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Box(Modifier.fillMaxSize().weight(1f), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(if (tab == "Избранное") "♡" else "♫", color = Lime, fontSize = 48.sp)
-                            Text(if (tab == "Избранное") "Пока нет избранных треков" else "Музыка не найдена", color = Color.White, fontWeight = FontWeight.Bold)
-                            Text(if (tab == "Избранное") "Добавляй треки сердечком" else "Добавь аудиофайлы на телефон и нажми «Обновить»", color = Soft, fontSize = 12.sp)
+                            Text(if (tab == "Избранное") "♡" else "♫", color = Lime, fontSize = 42.sp)
+                            Text(if (tab == "Избранное") "Пока нет избранных" else "Музыка не найдена", color = Color.White, fontWeight = FontWeight.Bold)
+                            Text("Проверь файлы на устройстве", color = Soft, fontSize = 12.sp)
                         }
                     }
                 } else {
-                    LazyColumn(contentPadding = PaddingValues(bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    LazyColumn(
+                        Modifier.weight(1f),
+                        contentPadding = PaddingValues(bottom = 80.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         itemsIndexed(visibleSongs, key = { _, song -> song.id }) { _, song ->
                             val realIndex = songs.indexOfFirst { it.id == song.id }
                             Row(
                                 Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable {
-                                    current = realIndex
-                                    onPlay(realIndex)
-                                }.padding(vertical = 8.dp),
+                                    if (realIndex != -1) onPlay(realIndex)
+                                }.padding(vertical = 6.dp, horizontal = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                AlbumTile("♫", Modifier.size(52.dp))
+                                AlbumTile("♫", Modifier.size(48.dp))
                                 Spacer(Modifier.width(12.dp))
                                 Column(Modifier.weight(1f)) {
-                                    Text(song.title, color = if (realIndex == current) Lime else Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(song.title, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     Text(song.artist, color = Soft, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
-                                IconButton(onClick = { if (song.id in favorites) favorites.remove(song.id) else favorites.add(song.id) }) {
-                                    Icon(Icons.Default.Favorite, contentDescription = "Избранное", tint = if (song.id in favorites) Lime else Soft)
+                                IconButton(onClick = { onToggleFavorite(song.id) }) {
+                                    Icon(
+                                        imageVector = if (song.id in favorites) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                        contentDescription = "Избранное",
+                                        tint = if (song.id in favorites) Lime else Soft
+                                    )
                                 }
                             }
                         }
                     }
                 }
-                if (selected != null) {
-                    Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = onPrevious) { Icon(Icons.Default.SkipPrevious, null, tint = Color.White, modifier = Modifier.size(30.dp)) }
-                        FilledIconButton(onClick = onToggle, modifier = Modifier.size(58.dp), colors = IconButtonDefaults.filledIconButtonColors(containerColor = Lime, contentColor = Night)) {
-                            Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null, modifier = Modifier.size(32.dp))
+
+                // Плеер управление внизу
+                Card(
+                    Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = Panel)
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        IconButton(onClick = onPrevious) {
+                            Icon(Icons.Default.SkipPrevious, null, tint = Color.White, modifier = Modifier.size(28.dp))
                         }
-                        IconButton(onClick = { onNext(); current = (current + 1).coerceAtMost((songs.size - 1).coerceAtLeast(0)) }) {
-                            Icon(Icons.Default.SkipNext, null, tint = Color.White, modifier = Modifier.size(30.dp))
+                        FilledIconButton(
+                            onClick = onToggle,
+                            modifier = Modifier.size(48.dp),
+                            colors = IconButtonDefaults.filledIconButtonColors(containerColor = Lime, contentColor = Night)
+                        ) {
+                            Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null, modifier = Modifier.size(24.dp))
+                        }
+                        IconButton(onClick = onNext) {
+                            Icon(Icons.Default.SkipNext, null, tint = Color.White, modifier = Modifier.size(28.dp))
                         }
                     }
                 }
             }
+        }
+
+        // Диалог Эквалайзера
+        if (showEqualizerDialog) {
+            AlertDialog(
+                onDismissRequest = { showEqualizerDialog = false },
+                containerColor = Panel,
+                title = { Text("Эквалайзер", color = Color.White) },
+                text = {
+                    Column(Modifier.fillMaxWidth()) {
+                        if (equalizer == null) {
+                            Text("Включи трек, чтобы настроить эквалайзер", color = Soft)
+                        } else {
+                            Text("Системный эквалайзер активен", color = Lime, fontSize = 12.sp)
+                            Spacer(Modifier.height(8.dp))
+                            val numBands = equalizer.numberOfBands.toInt()
+                            for (i in 0 until numBands) {
+                                val freq = equalizer.getCenterFreq(i.toShort()) / 1000
+                                var bandLevel by remember { mutableStateOf(equalizer.getBandLevel(i.toShort()).toFloat()) }
+                                Text("${freq} Hz: ${bandLevel.toInt()} mB", color = Soft, fontSize = 10.sp)
+                                Slider(
+                                    value = bandLevel,
+                                    onValueChange = { newValue ->
+                                        bandLevel = newValue
+                                        equalizer.setBandLevel(i.toShort(), newValue.toShort())
+                                    },
+                                    valueRange = equalizer.bandLevelRange[0].toFloat()..equalizer.bandLevelRange[1].toFloat(),
+                                    colors = SliderDefaults.colors(thumbColor = Lime, activeTrackColor = Lime)
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showEqualizerDialog = false }) {
+                        Text("Закрыть", color = Lime)
+                    }
+                }
+            )
+        }
+
+        // Диалог Таймера сна
+        if (showSleepTimerDialog) {
+            AlertDialog(
+                onDismissRequest = { showSleepTimerDialog = false },
+                containerColor = Panel,
+                title = { Text("Таймер сна", color = Color.White) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(0, 15, 30, 45, 60).forEach { mins ->
+                            Button(
+                                onClick = {
+                                    onSetSleepTimer(mins)
+                                    showSleepTimerDialog = false
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = if (sleepTimerMinutes == mins) Lime else Night)
+                            ) {
+                                Text(if (mins == 0) "Выключить таймер" else "$mins минут", color = if (sleepTimerMinutes == mins) Night else Color.White)
+                            }
+                        }
+                    }
+                },
+                confirmButton = {}
+            )
         }
     }
 }
 
 @Composable
 private fun AlbumTile(symbol: String, modifier: Modifier = Modifier) {
-    Box(modifier.clip(RoundedCornerShape(14.dp)).background(Brush.linearGradient(listOf(Color(0xFF35445A), Color(0xFF252B37)))), contentAlignment = Alignment.Center) {
-        Text(symbol, color = Lime, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+    Box(
+        modifier.clip(RoundedCornerShape(12.dp))
+            .background(Brush.linearGradient(listOf(Color(0xFF35445A), Color(0xFF252B37)))),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(symbol, color = Lime, fontSize = 20.sp, fontWeight = FontWeight.Bold)
     }
 }
