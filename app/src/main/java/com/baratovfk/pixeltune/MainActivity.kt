@@ -123,7 +123,9 @@ class MainActivity : ComponentActivity() {
                 },
                 onPrevious = {
                     if (songs.isNotEmpty()) {
-                        if (player.hasPreviousMediaItem()) {
+                        if (player.currentPosition > 3_000L) {
+                            player.seekTo(0, 0)
+                        } else if (player.hasPreviousMediaItem()) {
                             player.seekToPreviousMediaItem()
                         } else {
                             player.seekTo(0, 0)
