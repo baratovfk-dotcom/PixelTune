@@ -46,7 +46,7 @@ private val Panel = Color(0xFF191D26)
 private val Lime = Color(0xFFB8F36B)
 private val Soft = Color(0xFF9BA1B0)
 
-data class Song(val id: Long, val title: String, val artist: String, val uri: Uri)
+data class Song(val id: Long, val title: String, val artist: String, val uri: Uri, val dateAdded: Long)
 
 class MainActivity : ComponentActivity() {
     private var songs by mutableStateOf<List<Song>>(emptyList())
@@ -201,7 +201,7 @@ class MainActivity : ComponentActivity() {
     private fun loadSongs() {
         val found = mutableListOf<Song>()
         val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-        val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.TITLE, MediaStore.Audio.Media.ARTIST)
+        val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.TITLE, MediaStore.Audio.Media.ARTIST, MediaStore.Audio.Media.DATE_ADDED)
         val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
         val sort = "${MediaStore.Audio.Media.TITLE} ASC"
         val cursor: Cursor? = contentResolver.query(collection, projection, selection, null, sort)
@@ -209,11 +209,12 @@ class MainActivity : ComponentActivity() {
             val idCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
             val titleCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
             val artistCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
+            val dateAddedCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)
             while (it.moveToNext()) {
                 val id = it.getLong(idCol)
                 val title = it.getString(titleCol) ?: "Без названия"
                 val artist = it.getString(artistCol) ?: "Неизвестный исполнитель"
-                found += Song(id, title, artist, ContentUris.withAppendedId(collection, id))
+                found += Song(id, title, artist, ContentUris.withAppendedId(collection, id), it.getLong(dateAddedCol))
             }
         }
         songs = found
@@ -274,7 +275,7 @@ private fun PixelTuneScreen(
     }.let { list ->
         when (sortOrder) {
             "Исполнитель" -> list.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.artist }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.title })
-            "Недавно добавленные" -> list.sortedByDescending { it.id }
+            "Недавно добавленные" -> list.sortedByDescending { it.dateAdded }
             else -> list.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
         }
     }
