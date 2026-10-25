@@ -39,6 +39,7 @@ import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import kotlinx.coroutines.delay
 
 private val Night = Color(0xFF0D0F14)
 private val Panel = Color(0xFF191D26)
@@ -50,6 +51,8 @@ data class Song(val id: Long, val title: String, val artist: String, val uri: Ur
 class MainActivity : ComponentActivity() {
     private var songs by mutableStateOf<List<Song>>(emptyList())
     private var permissionGranted by mutableStateOf(false)
+    private var isPlayingState by mutableStateOf(false)
+    private var currentIndexState by mutableStateOf(0)
     private lateinit var player: ExoPlayer
     private lateinit var prefs: SharedPreferences
     private var equalizer: Equalizer? = null
@@ -72,8 +75,15 @@ class MainActivity : ComponentActivity() {
 
         player = ExoPlayer.Builder(this).build().apply {
             addListener(object : Player.Listener {
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    isPlayingState = isPlaying
+                }
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                    super.onMediaItemTransition(mediaItem, reason)
+                    currentIndexState = currentMediaItemIndex.coerceAtLeast(0)
+                }
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    currentIndexState = currentMediaItemIndex.coerceAtLeast(0)
+                    isPlayingState = isPlaying
                 }
             })
         }
@@ -85,7 +95,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             PixelTuneScreen(
                 songs = songs,
-                isPlaying = player.isPlaying,
+                player = player,
+                currentIndex = currentIndexState,
+                isPlaying = isPlayingState,
                 favorites = favorites.value,
                 isShuffle = isShuffleEnabled,
                 repeatMode = repeatModeState,
@@ -221,6 +233,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun PixelTuneScreen(
     songs: List<Song>,
+    player: ExoPlayer,
+    currentIndex: Int,
     isPlaying: Boolean,
     favorites: Set<Long>,
     isShuffle: Boolean,
@@ -241,11 +255,29 @@ private fun PixelTuneScreen(
     var searchQuery by remember { mutableStateOf("") }
     var showEqualizerDialog by remember { mutableStateOf(false) }
     var showSleepTimerDialog by remember { mutableStateOf(false) }
+    var sortOrder by remember { mutableStateOf("Название") }
+    var showSortMenu by remember { mutableStateOf(false) }
+    var progress by remember { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(player, isPlaying, currentIndex) {
+        while (true) {
+            val duration = player.duration
+            if (duration > 0L) progress = (player.currentPosition.toFloat() / duration).coerceIn(0f, 1f)
+            delay(500)
+        }
+    }
 
     val filteredSongs = songs.filter {
         it.title.contains(searchQuery, ignoreCase = true) || it.artist.contains(searchQuery, ignoreCase = true)
+    }.let { list ->
+        when (sortOrder) {
+            "Исполнитель" -> list.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.artist }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+            "Недавно добавленные" -> list.sortedByDescending { it.id }
+            else -> list.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+        }
     }
     val visibleSongs = if (tab == "Избранное") filteredSongs.filter { it.id in favorites } else filteredSongs
+    val currentSong = songs.getOrNull(currentIndex)
 
     MaterialTheme(colorScheme = darkColorScheme(primary = Lime, background = Night, surface = Panel)) {
         Scaffold(
@@ -327,8 +359,25 @@ private fun PixelTuneScreen(
                             Text("Таймер: ${sleepTimerMinutes}м", color = Lime, fontSize = 12.sp)
                         }
                     }
-                    Button(onClick = onRequestPermission, colors = ButtonDefaults.buttonColors(containerColor = Panel), shape = RoundedCornerShape(50)) {
-                        Text("Обновить", color = Lime, fontSize = 12.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box {
+                            TextButton(onClick = { showSortMenu = true }) {
+                                Icon(Icons.Default.Sort, contentDescription = null, tint = Lime, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text(sortOrder, color = Lime, fontSize = 11.sp)
+                            }
+                            DropdownMenu(expanded = showSortMenu, onDismissRequest = { showSortMenu = false }) {
+                                listOf("Название", "Исполнитель", "Недавно добавленные").forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option) },
+                                        onClick = { sortOrder = option; showSortMenu = false }
+                                    )
+                                }
+                            }
+                        }
+                        Button(onClick = onRequestPermission, colors = ButtonDefaults.buttonColors(containerColor = Panel), shape = RoundedCornerShape(50)) {
+                            Text("Обновить", color = Lime, fontSize = 12.sp)
+                        }
                     }
                 }
 
@@ -376,29 +425,65 @@ private fun PixelTuneScreen(
                     }
                 }
 
-                // Плеер управление внизу
+                // Мини-плеер: текущий трек, прогресс, перемотка и транспортные кнопки
                 Card(
                     Modifier.fillMaxWidth().padding(vertical = 8.dp),
                     shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = Panel)
                 ) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        IconButton(onClick = onPrevious) {
-                            Icon(Icons.Default.SkipPrevious, null, tint = Color.White, modifier = Modifier.size(28.dp))
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            AlbumTile("♫", Modifier.size(42.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(currentSong?.title ?: "Выбери трек", color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(currentSong?.artist ?: "PixelTune", color = Soft, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            if (currentSong != null) {
+                                IconButton(onClick = { onToggleFavorite(currentSong.id) }) {
+                                    Icon(
+                                        if (currentSong.id in favorites) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                        contentDescription = "Избранное",
+                                        tint = if (currentSong.id in favorites) Lime else Soft
+                                    )
+                                }
+                            }
                         }
-                        FilledIconButton(
-                            onClick = onToggle,
-                            modifier = Modifier.size(48.dp),
-                            colors = IconButtonDefaults.filledIconButtonColors(containerColor = Lime, contentColor = Night)
+                        Slider(
+                            value = progress,
+                            onValueChange = { progress = it },
+                            onValueChangeFinished = {
+                                val duration = player.duration
+                                if (duration > 0L) player.seekTo((progress * duration).toLong())
+                            },
+                            valueRange = 0f..1f,
+                            colors = SliderDefaults.colors(thumbColor = Lime, activeTrackColor = Lime, inactiveTrackColor = Soft.copy(alpha = .25f)),
+                            modifier = Modifier.height(28.dp)
+                        )
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(formatTime(player.currentPosition), color = Soft, fontSize = 10.sp)
+                            Text(formatTime(player.duration), color = Soft, fontSize = 10.sp)
+                        }
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
                         ) {
-                            Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null, modifier = Modifier.size(24.dp))
-                        }
-                        IconButton(onClick = onNext) {
-                            Icon(Icons.Default.SkipNext, null, tint = Color.White, modifier = Modifier.size(28.dp))
+                            IconButton(onClick = onPrevious) {
+                                Icon(Icons.Default.SkipPrevious, contentDescription = "Предыдущий трек", tint = Color.White, modifier = Modifier.size(28.dp))
+                            }
+                            Spacer(Modifier.width(18.dp))
+                            FilledIconButton(
+                                onClick = onToggle,
+                                modifier = Modifier.size(48.dp),
+                                colors = IconButtonDefaults.filledIconButtonColors(containerColor = Lime, contentColor = Night)
+                            ) {
+                                Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = if (isPlaying) "Пауза" else "Воспроизвести", modifier = Modifier.size(24.dp))
+                            }
+                            Spacer(Modifier.width(18.dp))
+                            IconButton(onClick = onNext) {
+                                Icon(Icons.Default.SkipNext, contentDescription = "Следующий трек", tint = Color.White, modifier = Modifier.size(28.dp))
+                            }
                         }
                     }
                 }
@@ -470,6 +555,12 @@ private fun PixelTuneScreen(
             )
         }
     }
+}
+
+private fun formatTime(milliseconds: Long): String {
+    if (milliseconds <= 0L || milliseconds == androidx.media3.common.C.TIME_UNSET) return "0:00"
+    val totalSeconds = milliseconds / 1000
+    return "${totalSeconds / 60}:${(totalSeconds % 60).toString().padStart(2, '0')}"
 }
 
 @Composable
