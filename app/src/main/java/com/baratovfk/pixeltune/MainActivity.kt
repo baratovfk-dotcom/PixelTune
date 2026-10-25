@@ -79,11 +79,11 @@ class MainActivity : ComponentActivity() {
                     isPlayingState = isPlaying
                 }
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                    currentIndexState = currentMediaItemIndex.coerceAtLeast(0)
+                    currentIndexState = player.currentMediaItemIndex.coerceAtLeast(0)
                 }
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     currentIndexState = currentMediaItemIndex.coerceAtLeast(0)
-                    isPlayingState = isPlaying
+                    isPlayingState = player.isPlaying
                 }
             })
         }
