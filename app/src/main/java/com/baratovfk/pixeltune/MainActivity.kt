@@ -274,9 +274,9 @@ private fun PixelTuneScreen(
         it.title.contains(searchQuery, ignoreCase = true) || it.artist.contains(searchQuery, ignoreCase = true)
     }.let { list ->
         when (sortOrder) {
-            "Исполнитель" -> list.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.artist }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+            "Исполнитель" -> list.sortedWith(compareBy<Song> { it.artist.lowercase() }.thenBy { it.title.lowercase() })
             "Недавно добавленные" -> list.sortedByDescending { it.dateAdded }
-            else -> list.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+            else -> list.sortedWith(compareBy<Song> { it.title.lowercase() })
         }
     }
     val visibleSongs = if (tab == "Избранное") filteredSongs.filter { it.id in favorites } else filteredSongs
