@@ -3,7 +3,6 @@ package com.baratovfk.pixeltune
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -24,45 +23,8 @@ class PlaybackService : MediaSessionService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val player = getOrCreatePlayer(this)
-
-        val callback = object : MediaSession.Callback {
-            override fun onPlay() {
-                player.play()
-            }
-
-            override fun onPause() {
-                player.pause()
-            }
-
-            override fun onSeekTo(pos: Long) {
-                player.seekTo(pos)
-            }
-
-            override fun onSkipToNext() {
-                // Переключение на следующий трек, если есть очередь
-                if (player.hasNextMediaItem()) {
-                    player.seekToNextMediaItem()
-                }
-            }
-
-            override fun onSkipToPrevious() {
-                // Переключение на предыдущий трек
-                if (player.hasPreviousMediaItem()) {
-                    player.seekToPreviousMediaItem()
-                }
-            }
-
-            override fun onStop() {
-                player.stop()
-                // Опционально: остановить сервис
-                // stopSelf()
-            }
-        }
-
-        mediaSession = MediaSession.Builder(this, player)
+        mediaSession = MediaSession.Builder(this, getOrCreatePlayer(this))
             .setSessionActivity(sessionActivity)
-            .setCallback(callback)
             .build()
     }
 
