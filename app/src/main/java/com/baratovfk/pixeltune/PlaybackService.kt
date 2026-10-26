@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 
@@ -12,6 +13,15 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+
+        // Configure the Media3 notification explicitly. The service otherwise relies on
+        // Media3's default provider, which can leave the notification without a valid
+        // app-specific small icon on some device builds.
+        setMediaNotificationProvider(
+            DefaultMediaNotificationProvider.Builder(this)
+                .setSmallIcon(R.drawable.ic_pixeltune)
+                .build()
+        )
 
         val activityIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -23,7 +33,12 @@ class PlaybackService : MediaSessionService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        mediaSession = MediaSession.Builder(this, getOrCreatePlayer(this))
+        val player = getOrCreatePlayer(this).apply {
+            // Keep the audio focus/noisy-output behavior consistent with a media player.
+            setHandleAudioBecomingNoisy(true)
+        }
+
+        mediaSession = MediaSession.Builder(this, player)
             .setSessionActivity(sessionActivity)
             .build()
     }
@@ -48,7 +63,9 @@ class PlaybackService : MediaSessionService() {
             private set
 
         fun getOrCreatePlayer(context: Context): ExoPlayer = synchronized(LOCK) {
-            sharedPlayer ?: ExoPlayer.Builder(context.applicationContext).build().also { sharedPlayer = it }
+            sharedPlayer ?: ExoPlayer.Builder(context.applicationContext).build().also {
+                sharedPlayer = it
+            }
         }
     }
 }
