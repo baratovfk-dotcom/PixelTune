@@ -69,6 +69,17 @@ class MainActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         permissionGranted = granted
         if (granted) loadSongs()
+        requestNotificationPermissionIfNeeded()
+    }
+
+    private val notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* system notification permission result */ }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -95,7 +106,12 @@ class MainActivity : ComponentActivity() {
 
         val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
         permissionGranted = ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
-        if (permissionGranted) loadSongs() else permissionLauncher.launch(permission)
+        if (permissionGranted) {
+            loadSongs()
+            requestNotificationPermissionIfNeeded()
+        } else {
+            permissionLauncher.launch(permission)
+        }
 
         setContent {
             PixelTuneScreen(
