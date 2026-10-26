@@ -3,6 +3,7 @@ package com.baratovfk.pixeltune
 import android.Manifest
 import android.content.ContentUris
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.database.Cursor
@@ -46,7 +47,7 @@ private val Panel = Color(0xFF191D26)
 private val Lime = Color(0xFFB8F36B)
 private val Soft = Color(0xFF9BA1B0)
 
-data class Song(val id: Long, val title: String, val artist: String, val uri: Uri, val dateAdded: Long)
+data class Song(val id: Long, val title: String, val artist: String, val uri: Uri, val dateAdded: Long, val folder: String)
 
 class MainActivity : ComponentActivity() {
     private var songs by mutableStateOf<List<Song>>(emptyList())
@@ -73,7 +74,9 @@ class MainActivity : ComponentActivity() {
         prefs = getSharedPreferences("pixeltune_prefs", Context.MODE_PRIVATE)
         loadFavoritesFromPrefs()
 
-        player = ExoPlayer.Builder(this).build().apply {
+        player = PlaybackService.getOrCreatePlayer(this)
+        startService(Intent(this, PlaybackService::class.java))
+        player.apply {
             addListener(object : Player.Listener {
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     isPlayingState = isPlaying
@@ -201,7 +204,7 @@ class MainActivity : ComponentActivity() {
     private fun loadSongs() {
         val found = mutableListOf<Song>()
         val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-        val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.TITLE, MediaStore.Audio.Media.ARTIST, MediaStore.Audio.Media.DATE_ADDED)
+        val projection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.TITLE, MediaStore.Audio.Media.ARTIST, MediaStore.Audio.Media.DATE_ADDED, MediaStore.Audio.Media.RELATIVE_PATH) else arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.TITLE, MediaStore.Audio.Media.ARTIST, MediaStore.Audio.Media.DATE_ADDED)
         val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
         val sort = "${MediaStore.Audio.Media.TITLE} ASC"
         val cursor: Cursor? = contentResolver.query(collection, projection, selection, null, sort)
@@ -210,11 +213,13 @@ class MainActivity : ComponentActivity() {
             val titleCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
             val artistCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
             val dateAddedCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)
+            val folderCol = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) it.getColumnIndex(MediaStore.Audio.Media.RELATIVE_PATH) else -1
             while (it.moveToNext()) {
                 val id = it.getLong(idCol)
                 val title = it.getString(titleCol) ?: "Без названия"
                 val artist = it.getString(artistCol) ?: "Неизвестный исполнитель"
-                found += Song(id, title, artist, ContentUris.withAppendedId(collection, id), it.getLong(dateAddedCol))
+                val folder = if (folderCol >= 0) (it.getString(folderCol) ?: "Музыка").trimEnd('/').ifBlank { "Корень хранилища" } else "Музыка"
+                found += Song(id, title, artist, ContentUris.withAppendedId(collection, id), it.getLong(dateAddedCol), folder)
             }
         }
         songs = found
@@ -228,7 +233,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         sleepTimer?.cancel()
         equalizer?.release()
-        player.release()
+        // PlaybackService owns the player, so closing the screen does not stop audio.
         super.onDestroy()
     }
 }
@@ -261,6 +266,10 @@ private fun PixelTuneScreen(
     var sortOrder by remember { mutableStateOf("Название") }
     var showSortMenu by remember { mutableStateOf(false) }
     var progress by remember { mutableFloatStateOf(0f) }
+    var selectedFolder by remember { mutableStateOf<String?>(null) }
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+    val folders = songs.map { it.folder }.distinct().sorted()
 
     LaunchedEffect(player, isPlaying, currentIndex) {
         while (true) {
@@ -271,7 +280,8 @@ private fun PixelTuneScreen(
     }
 
     val filteredSongs = songs.filter {
-        it.title.contains(searchQuery, ignoreCase = true) || it.artist.contains(searchQuery, ignoreCase = true)
+        (it.title.contains(searchQuery, ignoreCase = true) || it.artist.contains(searchQuery, ignoreCase = true) || it.folder.contains(searchQuery, ignoreCase = true)) &&
+            (selectedFolder == null || it.folder == selectedFolder)
     }.let { list ->
         when (sortOrder) {
             "Исполнитель" -> list.sortedWith(compareBy<Song> { it.artist.lowercase() }.thenBy { it.title.lowercase() })
@@ -283,6 +293,33 @@ private fun PixelTuneScreen(
     val currentSong = songs.getOrNull(currentIndex)
 
     MaterialTheme(colorScheme = darkColorScheme(primary = Lime, background = Night, surface = Panel)) {
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            drawerContent = {
+                ModalDrawerSheet(drawerContainerColor = Panel) {
+                    Spacer(Modifier.height(24.dp))
+                    Text("PIXELTUNE", color = Lime, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp))
+                    Text("БИБЛИОТЕКА", color = Soft, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+                    NavigationDrawerItem(label = { Text("Вся музыка") }, selected = tab == "Музыка" && selectedFolder == null, onClick = { tab = "Музыка"; selectedFolder = null; scope.launch { drawerState.close() } }, icon = { Icon(Icons.Default.LibraryMusic, null) }, colors = NavigationDrawerItemDefaults.colors(selectedContainerColor = Lime.copy(alpha = .15f), selectedTextColor = Lime, selectedIconColor = Lime))
+                    NavigationDrawerItem(label = { Text("Избранное") }, selected = tab == "Избранное", onClick = { tab = "Избранное"; selectedFolder = null; scope.launch { drawerState.close() } }, icon = { Icon(Icons.Default.Favorite, null) }, colors = NavigationDrawerItemDefaults.colors(selectedContainerColor = Lime.copy(alpha = .15f), selectedTextColor = Lime, selectedIconColor = Lime))
+                    NavigationDrawerItem(label = { Text("Очередь воспроизведения") }, selected = false, onClick = { tab = "Музыка"; selectedFolder = null; scope.launch { drawerState.close() } }, icon = { Icon(Icons.Default.QueueMusic, null) }, colors = NavigationDrawerItemDefaults.colors(selectedContainerColor = Lime.copy(alpha = .15f), selectedTextColor = Lime, selectedIconColor = Lime))
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp), color = Soft.copy(alpha = .25f))
+                    Text("ПАПКИ УСТРОЙСТВА", color = Soft, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+                    LazyColumn {
+                        itemsIndexed(folders, key = { _, folder -> folder }) { _, folder ->
+                            NavigationDrawerItem(
+                                label = { Text(folder.substringAfterLast('/').ifBlank { folder }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                selected = selectedFolder == folder,
+                                onClick = { tab = "Музыка"; selectedFolder = folder; scope.launch { drawerState.close() } },
+                                icon = { Icon(Icons.Default.Folder, null) },
+                                badge = { Text(songs.count { it.folder == folder }.toString(), color = Soft, fontSize = 11.sp) },
+                                colors = NavigationDrawerItemDefaults.colors(selectedContainerColor = Lime.copy(alpha = .15f), selectedTextColor = Lime, selectedIconColor = Lime)
+                            )
+                        }
+                    }
+                }
+            }
+        ) {
         Scaffold(
             containerColor = Night,
             bottomBar = {
@@ -304,9 +341,14 @@ private fun PixelTuneScreen(
             Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 20.dp)) {
                 Spacer(Modifier.height(16.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Column {
-                        Text("PIXELTUNE", color = Lime, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
-                        Text(if (tab == "Музыка") "Твоя музыка." else "Избранное", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                            Icon(Icons.Default.Menu, contentDescription = "Открыть меню", tint = Lime)
+                        }
+                        Column {
+                            Text("PIXELTUNE", color = Lime, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
+                            Text(selectedFolder?.substringAfterLast('/') ?: if (tab == "Музыка") "Твоя музыка." else "Избранное", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                     }
                     Row {
                         IconButton(onClick = { showEqualizerDialog = true }) {
@@ -385,7 +427,7 @@ private fun PixelTuneScreen(
                 }
 
                 Spacer(Modifier.height(8.dp))
-                Text(if (tab == "Музыка") "Все треки (${visibleSongs.size})" else "Любимые треки (${visibleSongs.size})", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                Text(if (tab == "Избранное") "Любимые треки (${visibleSongs.size})" else if (selectedFolder != null) "Треки в папке (${visibleSongs.size})" else "Все треки (${visibleSongs.size})", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
 
                 if (visibleSongs.isEmpty()) {
@@ -556,6 +598,7 @@ private fun PixelTuneScreen(
                 },
                 confirmButton = {}
             )
+        }
         }
     }
 }
