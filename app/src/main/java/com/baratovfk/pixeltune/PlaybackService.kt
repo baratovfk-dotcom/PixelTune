@@ -14,11 +14,13 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
 
-        // Use Media3's notification provider explicitly. Media3 1.5.1 does not expose
-        // setSmallIcon() on this builder, so keep the provider's supported defaults.
-        setMediaNotificationProvider(
-            DefaultMediaNotificationProvider.Builder(this).build()
-        )
+        // Use a dedicated channel so an old blocked notification channel cannot hide playback.
+        // Media3 1.5.1 exposes setSmallIcon() on the provider, not on its Builder.
+        val notificationProvider = DefaultMediaNotificationProvider.Builder(this)
+            .setChannelId("pixeltune_media_playback")
+            .build()
+            .apply { setSmallIcon(R.drawable.ic_notification_music) }
+        setMediaNotificationProvider(notificationProvider)
 
         val activityIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -31,7 +33,6 @@ class PlaybackService : MediaSessionService() {
         )
 
         val player = getOrCreatePlayer(this).apply {
-            // Keep the audio focus/noisy-output behavior consistent with a media player.
             setHandleAudioBecomingNoisy(true)
         }
 
