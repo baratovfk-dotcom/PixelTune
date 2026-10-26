@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.delay
@@ -225,7 +226,10 @@ class MainActivity : ComponentActivity() {
         songs = found
         player.clearMediaItems()
         if (found.isNotEmpty()) {
-            found.forEach { player.addMediaItem(MediaItem.fromUri(it.uri)) }
+            found.forEach { song ->
+                val metadata = MediaMetadata.Builder().setTitle(song.title).setArtist(song.artist).build()
+                player.addMediaItem(MediaItem.Builder().setUri(song.uri).setMediaMetadata(metadata).build())
+            }
             player.prepare()
         }
     }
