@@ -389,8 +389,8 @@ private fun PixelTuneScreen(
                     onValueChange = { searchQuery = it },
                     placeholder = { Text("Поиск треков...", color = Soft) },
                     leadingIcon = { Icon(Icons.Default.Search, null, tint = Soft) },
-                    modifier = Modifier.fillMaxWidth().height(60.dp),
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 16.sp, lineHeight = 20.sp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 16.sp, lineHeight = 22.sp),
                     shape = RoundedCornerShape(16.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Lime,
