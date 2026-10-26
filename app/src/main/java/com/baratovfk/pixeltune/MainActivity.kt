@@ -257,12 +257,22 @@ class MainActivity : ComponentActivity() {
             }
         }
         songs = found
-        player.clearMediaItems()
-        if (found.isNotEmpty()) {
-            found.forEach { song ->
-                val metadata = MediaMetadata.Builder().setTitle(song.title).setArtist(song.artist).build()
-                player.addMediaItem(MediaItem.Builder().setUri(song.uri).setMediaMetadata(metadata).build())
-            }
+
+        // Replace the playlist as one operation so MediaController and MediaSession
+        // always share the complete queue for automatic track transitions.
+        val mediaItems = found.map { song ->
+            val metadata = MediaMetadata.Builder()
+                .setTitle(song.title)
+                .setArtist(song.artist)
+                .build()
+            MediaItem.Builder()
+                .setUri(song.uri)
+                .setMediaMetadata(metadata)
+                .build()
+        }
+
+        player.setMediaItems(mediaItems)
+        if (mediaItems.isNotEmpty()) {
             player.prepare()
         }
     }
