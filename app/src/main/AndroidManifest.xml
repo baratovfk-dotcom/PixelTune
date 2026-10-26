@@ -4,7 +4,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-    <application android:theme="@android:style/Theme.Material.Light.NoActionBar" android:label="PixelTune" android:allowBackup="true">
+    <application android:theme="@android:style/Theme.Material.Light.NoActionBar" android:label="PixelTune" android:icon="@drawable/ic_pixeltune" android:allowBackup="true">
         <service android:name=".PlaybackService" android:exported="true" android:foregroundServiceType="mediaPlayback">
             <intent-filter>
                 <action android:name="androidx.media3.session.MediaSessionService" />
