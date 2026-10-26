@@ -2,6 +2,7 @@ package com.baratovfk.pixeltune
 
 import android.Manifest
 import android.content.ContentUris
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -41,6 +42,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -56,7 +59,8 @@ class MainActivity : ComponentActivity() {
     private var permissionGranted by mutableStateOf(false)
     private var isPlayingState by mutableStateOf(false)
     private var currentIndexState by mutableStateOf(0)
-    private lateinit var player: ExoPlayer
+    private lateinit var player: MediaController
+    private lateinit var audioPlayer: ExoPlayer
     private lateinit var prefs: SharedPreferences
     private var equalizer: Equalizer? = null
 
@@ -87,23 +91,35 @@ class MainActivity : ComponentActivity() {
         prefs = getSharedPreferences("pixeltune_prefs", Context.MODE_PRIVATE)
         loadFavoritesFromPrefs()
 
-        player = PlaybackService.getOrCreatePlayer(this)
-        startService(Intent(this, PlaybackService::class.java))
-        player.apply {
-            addListener(object : Player.Listener {
-                override fun onIsPlayingChanged(isPlaying: Boolean) {
-                    isPlayingState = isPlaying
-                }
-                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                    currentIndexState = player.currentMediaItemIndex.coerceAtLeast(0)
-                }
-                override fun onPlaybackStateChanged(playbackState: Int) {
-                    currentIndexState = player.currentMediaItemIndex.coerceAtLeast(0)
-                    isPlayingState = player.isPlaying
-                }
-            })
-        }
+        // Connect to the MediaSessionService instead of controlling its player directly.
+        // The controller binding keeps the service/session alive and lets Media3 publish controls.
+        val token = SessionToken(this, ComponentName(this, PlaybackService::class.java))
+        val controllerFuture = MediaController.Builder(this, token).buildAsync()
+        controllerFuture.addListener({
+            try {
+                player = controllerFuture.get()
+                audioPlayer = PlaybackService.sharedPlayer
+                    ?: throw IllegalStateException("PlaybackService player was not created")
+                player.addListener(object : Player.Listener {
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        isPlayingState = isPlaying
+                    }
+                    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                        currentIndexState = player.currentMediaItemIndex.coerceAtLeast(0)
+                    }
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        currentIndexState = player.currentMediaItemIndex.coerceAtLeast(0)
+                        isPlayingState = player.isPlaying
+                    }
+                })
+                setupPlayerUi()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }, ContextCompat.getMainExecutor(this))
+    }
 
+    private fun setupPlayerUi() {
         val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
         permissionGranted = ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
         if (permissionGranted) {
@@ -191,8 +207,8 @@ class MainActivity : ComponentActivity() {
 
     private fun initEqualizer() {
         try {
-            if (equalizer == null && player.audioSessionId != android.media.audiofx.AudioEffect.ERROR_BAD_VALUE) {
-                equalizer = Equalizer(0, player.audioSessionId).apply {
+            if (equalizer == null && audioPlayer.audioSessionId != android.media.audiofx.AudioEffect.ERROR_BAD_VALUE) {
+                equalizer = Equalizer(0, audioPlayer.audioSessionId).apply {
                     enabled = true
                 }
             }
@@ -254,7 +270,8 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         sleepTimer?.cancel()
         equalizer?.release()
-        // PlaybackService owns the player, so closing the screen does not stop audio.
+        // Release only the controller. PlaybackService owns the ExoPlayer.
+        if (::player.isInitialized) player.release()
         super.onDestroy()
     }
 }
@@ -262,7 +279,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun PixelTuneScreen(
     songs: List<Song>,
-    player: ExoPlayer,
+    player: Player,
     currentIndex: Int,
     isPlaying: Boolean,
     favorites: Set<Long>,
