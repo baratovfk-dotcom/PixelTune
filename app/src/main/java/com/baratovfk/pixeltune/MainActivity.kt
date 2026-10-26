@@ -88,7 +88,7 @@ class MainActivity : ComponentActivity() {
         loadFavoritesFromPrefs()
 
         player = PlaybackService.getOrCreatePlayer(this)
-        startService(Intent(this, PlaybackService::class.java))
+        ContextCompat.startForegroundService(this, Intent(this, PlaybackService::class.java))
         player.apply {
             addListener(object : Player.Listener {
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
