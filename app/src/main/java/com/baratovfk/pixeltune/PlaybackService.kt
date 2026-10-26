@@ -14,13 +14,10 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
 
-        // Configure the Media3 notification explicitly. The service otherwise relies on
-        // Media3's default provider, which can leave the notification without a valid
-        // app-specific small icon on some device builds.
+        // Use Media3's notification provider explicitly. Media3 1.5.1 does not expose
+        // setSmallIcon() on this builder, so keep the provider's supported defaults.
         setMediaNotificationProvider(
-            DefaultMediaNotificationProvider.Builder(this)
-                .setSmallIcon(R.drawable.ic_pixeltune)
-                .build()
+            DefaultMediaNotificationProvider.Builder(this).build()
         )
 
         val activityIntent = Intent(this, MainActivity::class.java).apply {
