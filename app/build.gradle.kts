@@ -20,6 +20,20 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    signingConfigs {
+        create("release") {
+            storeFile = file(System.getenv("PIXELTUNE_KEYSTORE_PATH") ?: "release.keystore")
+            storePassword = System.getenv("PIXELTUNE_STORE_PASSWORD")
+            keyAlias = System.getenv("PIXELTUNE_KEY_ALIAS")
+            keyPassword = System.getenv("PIXELTUNE_KEY_PASSWORD")
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
+            isMinifyEnabled = false
+        }
+    }
     buildFeatures { compose = true }
 }
 dependencies {
