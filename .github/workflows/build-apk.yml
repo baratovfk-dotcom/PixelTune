@@ -1,4 +1,4 @@
-name: Build APK
+name: Build signed APK
 
 on:
   push:
@@ -30,11 +30,32 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build Debug APK
+      - name: Decode signing keystore
+        if: github.event_name != 'pull_request'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.PIXELTUNE_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "Missing GitHub Secret PIXELTUNE_KEYSTORE_BASE64"
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 --decode > app/release.keystore
+
+      - name: Build signed Release APK
+        if: github.event_name != 'pull_request'
+        env:
+          PIXELTUNE_KEYSTORE_PATH: release.keystore
+          PIXELTUNE_STORE_PASSWORD: ${{ secrets.PIXELTUNE_STORE_PASSWORD }}
+          PIXELTUNE_KEY_ALIAS: ${{ secrets.PIXELTUNE_KEY_ALIAS }}
+          PIXELTUNE_KEY_PASSWORD: ${{ secrets.PIXELTUNE_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease
+
+      - name: Build Debug APK for pull requests
+        if: github.event_name == 'pull_request'
         run: ./gradlew assembleDebug
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PixelTune-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: ${{ github.event_name == 'pull_request' && 'PixelTune-debug-apk' || 'PixelTune-signed-release-apk' }}
+          path: ${{ github.event_name == 'pull_request' && 'app/build/outputs/apk/debug/app-debug.apk' || 'app/build/outputs/apk/release/app-release.apk' }}
