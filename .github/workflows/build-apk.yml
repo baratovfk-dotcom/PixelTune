@@ -46,7 +46,7 @@ jobs:
         env:
           PIXELTUNE_KEYSTORE_PATH: release.keystore
           PIXELTUNE_STORE_PASSWORD: ${{ secrets.PIXELTUNE_STORE_PASSWORD }}
-          PIXELTUNE_KEY_ALIAS: ${{ secrets.PIXELTUNE_KEY_ALIAS }}
+          PIXELTUNE_KEY_ALIAS: ${{ secrets.PIXELTUNE_KEY_ALIAS || 'pixeltune' }}
           PIXELTUNE_KEY_PASSWORD: ${{ secrets.PIXELTUNE_KEY_PASSWORD }}
         run: ./gradlew assembleRelease
 
